@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>图片风格化转绘工坊</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #121212;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  .container {
+    width: 100%;
+    max-width: 650px;
+    background: #1e1e1e;
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  }
+  h2 { text-align: center; font-size: 20px; margin-bottom: 20px; color: #e0e0e0; }
+  
+  /* 棋盘格背景，用于透明抠图查看 */
+  .canvas-container {
+    width: 100%;
+    height: 350px;
+    background-color: #2a2a2a;
+    background-image: 
+      linear-gradient(45deg, #333 25%, transparent 25%), 
+      linear-gradient(-45deg, #333 25%, transparent 25%), 
+      linear-gradient(45deg, transparent 75%, #333 75%), 
+      linear-gradient(-45deg, transparent 75%, #333 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+    border: 2px dashed #444;
+    border-radius: 12px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    margin-bottom: 20px;
+    position: relative;
+    cursor: pointer;
+  }
+  .canvas-container canvas {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: none;
+  }
+  .placeholder-text {
+    color: #888;
+    font-size: 15px;
+    position: absolute;
+    pointer-events: none;
+    text-align: center;
+    text-shadow: 1px 1px 2px #000;
+  }
+
+  /* 滤镜选择区 */
+  .filters {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 12px;
+    margin-bottom: 20px;
+    scrollbar-width: thin;
+  }
+  .filters::-webkit-scrollbar { height: 6px; }
+  .filters::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+  
+  .filter-btn {
+    background: #333;
+    border: 1px solid #444;
+    color: #ccc;
+    padding: 8px 16px;
+    border-radius: 20px;
+    white-space: nowrap;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+    position: relative;
+  }
+  .filter-btn:active { transform: scale(0.92); }
+  .filter-btn.active {
+    background: #3b82f6;
+    color: #fff;
+    border-color: #3b82f6;
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.4);
+  }
+  .filter-btn.special {
+    background: #8b5cf6;
+    border-color: #8b5cf6;
+    color: #fff;
+  }
+
+  /* 操作按钮区 */
+  .actions {
+    display: flex;
+    gap: 12px;
+  }
+  .btn {
+    flex: 1;
+    padding: 14px;
+    border-radius: 12px;
+    border: none;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: transform 0.1s, opacity 0.2s;
+    user-select: none;
+  }
+  .btn:active:not(:disabled) { transform: scale(0.96); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-upload { background: #4b5563; color: #fff; }
+  .btn-copy { background: #10b981; color: #fff; }
+  
+  .file-input { display: none; }
+  
+  /* 遮罩与提示 */
+  .loading-mask {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.7); display: none; justify-content: center; align-items: center;
+    z-index: 10; color: #fff; font-size: 14px; flex-direction: column; gap: 10px;
+    border-radius: 12px; backdrop-filter: blur(2px);
+  }
+  .spinner {
+    width: 28px; height: 28px; border: 3px solid rgba(255,255,255,0.2);
+    border-radius: 50%; border-top-color: #3b82f6; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .toast {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.85); color: #fff; padding: 12px 24px;
+    border-radius: 8px; font-size: 14px; opacity: 0; pointer-events: none;
+    transition: opacity 0.3s; z-index: 100; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h2>🎨 图片风格化转绘</h2>
+
+  <div class="canvas-container" id="dropZone">
+    <span class="placeholder-text" id="placeholder">点击此处导入图片<br><span style="font-size:12px;">(导入后在下方选择风格)</span></span>
+    <canvas id="mainCanvas"></canvas>
+    <div class="loading-mask" id="loadingMask">
+      <div class="spinner"></div>
+      <span id="loadingText">正在重绘中...</span>
+    </div>
+  </div>
+
+  <div class="filters" id="filterList">
+    <button class="filter-btn active" data-filter="none">原图</button>
+    <button class="filter-btn special" data-filter="removebg">✨ 智能抠图</button>
+    <button class="filter-btn" data-filter="oil">古典油画</button>
+    <button class="filter-btn" data-filter="lineart">动画线稿</button>
+    <button class="filter-btn" data-filter="sharpen">锐化增强</button>
+    <button class="filter-btn" data-filter="emboss">浮雕艺术</button>
+    <button class="filter-btn" data-filter="cel">赛璐璐</button>
+    <button class="filter-btn" data-filter="anime">二次元</button>
+    <button class="filter-btn" data-filter="ink">水墨国风</button>
+    <button class="filter-btn" data-filter="ukiyoe">浮世绘</button>
+    <button class="filter-btn" data-filter="sketch">铅笔素描</button>
+    <button class="filter-btn" data-filter="comic">美漫波普</button>
+  </div>
+
+  <div class="actions">
+    <input type="file" id="fileInput" class="file-input" accept="image/*">
+    <button class="btn btn-upload" id="uploadBtn">选择图片</button>
+    <button class="btn btn-copy" id="copyBtn" disabled>复制图片</button>
+  </div>
+</div>
+
+<div class="toast" id="toast">提示信息</div>
+
+<script>
+  const canvas = document.getElementById('mainCanvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const placeholder = document.getElementById('placeholder');
+  const fileInput = document.getElementById('fileInput');
+  const copyBtn = document.getElementById('copyBtn');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const dropZone = document.getElementById('dropZone');
+  const filterList = document.getElementById('filterList');
+  const toast = document.getElementById('toast');
+  const loadingMask = document.getElementById('loadingMask');
+  const loadingText = document.getElementById('loadingText');
+
+  let originalImage = new Image();
+  let currentFilter = 'none';
+  let isProcessing = false;
+
+  // 导入图片事件
+  dropZone.addEventListener('click', () => fileInput.click());
+  uploadBtn.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => { originalImage.src = event.target.result; };
+    reader.readAsDataURL(file);
+    fileInput.value = ''; 
+  });
+
+  originalImage.onload = () => {
+    placeholder.style.display = 'none';
+    canvas.style.display = 'block';
+    copyBtn.disabled = false;
+
+    const MAX_WIDTH = 500; 
+    let width = originalImage.width;
+    let height = originalImage.height;
+    if (width > MAX_WIDTH) {
+      height = Math.round(height * (MAX_WIDTH / width));
+      width = MAX_WIDTH;
+    }
+    canvas.width = width;
+    canvas.height = height;
+    applyFilter(currentFilter);
+  };
+
+  filterList.addEventListener('click', (e) => {
+    const btn = e.target.closest('.filter-btn');
+    if (!btn) return;
+    if (isProcessing) { showToast("正在处理，请稍候"); return; }
+    if (!originalImage.src) { showToast("请先导入图片"); return; }
+    
+    const filterType = btn.dataset.filter;
+    if (filterType === currentFilter) return;
+    applyFilter(filterType);
+  });
+
+  // 核心调度器
+  function applyFilter(filterType) {
+    if (!originalImage.src || isProcessing) return;
+    
+    isProcessing = true;
+    loadingMask.style.display = 'flex';
+    loadingText.innerText = filterType === 'removebg' ? '正在分析边缘结构...' : '正在重绘中...';
+
+    setTimeout(() => {
+      setTimeout(() => {
+        try {
+          ctx.filter = 'none';
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(originalImage, 0, 0, canvas.width, canvas.height);
+          currentFilter = filterType;
+
+          document.querySelectorAll('.filter-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.filter === filterType);
+          });
+
+          if (filterType !== 'none') {
+            let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            switch (filterType) {
+              case 'removebg': applyAdvancedRemoveBg(imageData); break;
+              case 'oil': applyOilPaint(imageData); break;
+              case 'lineart': applyLineArt(imageData); break;
+              case 'sharpen': applyConvolution(imageData, [0, -1, 0, -1, 5, -1, 0, -1, 0]); break; 
+              case 'emboss': applyConvolution(imageData, [1, 1, 1, 1, 0.7, -1, -1, -1, -1]); break; 
+              case 'sketch': applySketch(imageData); break;
+              case 'comic': applyComic(imageData); break;
+              case 'cel': applyCelShading(imageData); break;
+              case 'anime': applyAnime(imageData); break;
+              case 'ink': applyInkWash(imageData); break;
+              case 'ukiyoe': applyUkiyoe(imageData); break;
+            }
+          }
+        } catch (error) {
+          console.error(error);
+          showToast("处理失败，请换一张图试试");
+        } finally {
+          loadingMask.style.display = 'none';
+          isProcessing = false;
+        }
+      }, 50); 
+    }, 20); 
+  }
+
+  // 通用卷积引擎 (锐化、浮雕等)
+  function applyConvolution(imgData, matrix) {
+    const data = imgData.data;
+    const w = canvas.width, h = canvas.height;
+    const output = new Uint8ClampedArray(data.length);
+    
+    for (let i = 0; i < data.length; i++) output[i] = data[i];
+
+    const side = Math.round(Math.sqrt(matrix.length));
+    const halfSide = Math.floor(side / 2);
+    
+    let alpha = 0;
+    for(let i = 0; i < matrix.length; i++) alpha += matrix[i];
+    if (alpha === 0) alpha = 1;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const dstOff = (y * w + x) * 4;
+        let r = 0, g = 0, b = 0;
+
+        for (let cy = 0; cy < side; cy++) {
+          for (let cx = 0; cx < side; cx++) {
+            const scy = y + cy - halfSide;
+            const scx = x + cx - halfSide;
+            
+            if (scy >= 0 && scy < h && scx >= 0 && scx < w) {
+              const srcOff = (scy * w + scx) * 4;
+              const wt = matrix[cy * side + cx];
+              r += data[srcOff] * wt;
+              g += data[srcOff + 1] * wt;
+              b += data[srcOff + 2] * wt;
+            }
+          }
+        }
+        output[dstOff] = r / alpha;
+        output[dstOff + 1] = g / alpha;
+        output[dstOff + 2] = b / alpha;
+        output[dstOff + 3] = 255;
+      }
+    }
+    for (let i = 0; i < output.length; i++) data[i] = output[i];
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  // 【恢复版】智能抠图：形态学边缘膨胀 + 泛洪隔离
+  function applyAdvancedRemoveBg(imgData) {
+    const data = imgData.data;
+    const w = canvas.width, h = canvas.height;
+    const gray = new Uint8ClampedArray(w * h);
+    
+    for (let i = 0; i < data.length; i += 4) {
+      gray[i / 4] = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+    }
+
+    const edges = new Uint8Array(w * h);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = y * w + x;
+        const gx = -1 * gray[idx - w - 1] + 1 * gray[idx - w + 1]
+                 + -2 * gray[idx - 1]     + 2 * gray[idx + 1]
+                 + -1 * gray[idx + w - 1] + 1 * gray[idx + w + 1];
+        const gy = -1 * gray[idx - w - 1] - 2 * gray[idx - w] - 1 * gray[idx - w + 1]
+                 + 1 * gray[idx + w - 1] + 2 * gray[idx + w] + 1 * gray[idx + w + 1];
+        if (Math.sqrt(gx * gx + gy * gy) > 45) { // 阈值 45
+          edges[idx] = 1;
+        }
+      }
+    }
+
+    // 边缘膨胀 (Dilate)
+    const expandedEdges = new Uint8Array(w * h);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = y * w + x;
+        if (edges[idx] || edges[idx-1] || edges[idx+1] || edges[idx-w] || edges[idx+w]) {
+          expandedEdges[idx] = 1;
+        }
+      }
+    }
+
+    // 泛洪填充
+    const mask = new Uint8Array(w * h);
+    const queue = [];
+    
+    for (let x = 0; x < w; x++) { queue.push(x); queue.push((h - 1) * w + x); }
+    for (let y = 0; y < h; y++) { queue.push(y * w); queue.push(y * w + w - 1); }
+
+    while (queue.length > 0) {
+      const idx = queue.shift();
+      if (mask[idx] !== 0) continue; 
+      mask[idx] = 1; 
+
+      const x = idx % w;
+      const y = Math.floor(idx / w);
+
+      if (x > 0 && expandedEdges[idx - 1] !== 1 && mask[idx - 1] === 0) queue.push(idx - 1);
+      if (x < w - 1 && expandedEdges[idx + 1] !== 1 && mask[idx + 1] === 0) queue.push(idx + 1);
+      if (y > 0 && expandedEdges[idx - w] !== 1 && mask[idx - w] === 0) queue.push(idx - w);
+      if (y < h - 1 && expandedEdges[idx + w] !== 1 && mask[idx + w] === 0) queue.push(idx + w);
+    }
+
+    // 应用蒙版及羽化
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = y * w + x;
+        const pIdx = idx * 4;
+        
+        if (mask[idx] === 0) {
+          data[pIdx+3] = 255; 
+        } else {
+          data[pIdx+3] = 0;   
+        }
+      }
+    }
+    
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = y * w + x;
+        const pIdx = idx * 4;
+        if (data[pIdx+3] === 255) {
+          let transparent = 0;
+          if (data[(idx-1)*4+3] === 0) transparent++;
+          if (data[(idx+1)*4+3] === 0) transparent++;
+          if (data[(idx-w)*4+3] === 0) transparent++;
+          if (data[(idx+w)*4+3] === 0) transparent++;
+          
+          if (transparent > 0) data[pIdx+3] = 150; 
+        }
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  // 动画线稿 (压制反光)
+  function applyLineArt(imgData) {
+    const data = imgData.data;
+    const w = canvas.width, h = canvas.height;
+    const gray = new Uint8ClampedArray(data.length / 4);
+    
+    for (let i = 0; i < data.length; i += 4) {
+      gray[i / 4] = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+    }
+
+    const blurred = new Uint8ClampedArray(gray.length);
+    const kernel = [1/16, 2/16, 1/16, 2/16, 4/16, 2/16, 1/16, 2/16, 1/16];
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        let sum = 0, kIdx = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) sum += gray[(y + dy) * w + (x + dx)] * kernel[kIdx++];
+        blurred[y * w + x] = sum;
+      }
+    }
+
+    for (let i = 0; i < gray.length; i++) {
+      const base = gray[i];
+      const blend = blurred[i];
+      let result = base;
+
+      if (base > 220 && blend > 220) {
+        result = 255; 
+      } else if (blend < 255) {
+        result = Math.min(255, (base * 255) / (255 - blend));
+        result = Math.min(240, Math.max(0, (result - 128) * 1.5 + 128));
+      }
+
+      const p = i * 4; 
+      data[p] = result; data[p+1] = result; data[p+2] = result; data[p+3] = 255;
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  function applyOilPaint(imgData) {
+    const data = imgData.data;
+    const w = canvas.width, h = canvas.height;
+    const output = new Uint8ClampedArray(data.length);
+    const radius = 3; 
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let minVariance = Infinity, bestColor = [0, 0, 0];
+        const quadrants = [{ dx: -radius, dy: -radius }, { dx: 0, dy: -radius }, { dx: -radius, dy: 0 }, { dx: 0, dy: 0 }];
+        for (let q = 0; q < 4; q++) {
+          let sumR = 0, sumG = 0, sumB = 0, sumSq = 0, count = 0;
+          const startX = x + quadrants[q].dx, startY = y + quadrants[q].dy;
+          for (let ky = 0; ky <= radius; ky++) {
+            for (let kx = 0; kx <= radius; kx++) {
+              const px = startX + kx, py = startY + ky;
+              if (px >= 0 && px < w && py >= 0 && py < h) {
+                const idx = (py * w + px) * 4;
+                const r = data[idx], g = data[idx+1], b = data[idx+2];
+                sumR += r; sumG += g; sumB += b; sumSq += (r*r + g*g + b*b); count++;
+              }
+            }
+          }
+          if (count > 0) {
+            const variance = sumSq / count - Math.pow((sumR + sumG + sumB) / (3 * count), 2);
+            if (variance < minVariance) { minVariance = variance; bestColor = [sumR / count, sumG / count, sumB / count]; }
+          }
+        }
+        const outIdx = (y * w + x) * 4;
+        output[outIdx] = bestColor[0]; output[outIdx+1] = bestColor[1]; output[outIdx+2] = bestColor[2]; output[outIdx+3] = 255;
+      }
+    }
+    for (let i = 0; i < output.length; i += 4) {
+      let noise = (Math.random() - 0.5) * 20; 
+      data[i] = output[i] + noise; data[i+1] = output[i+1] + noise; data[i+2] = output[i+2] + noise; data[i+3] = 255;
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  function applySketch(imgData) {
+    const data = imgData.data, w = canvas.width, h = canvas.height;
+    const grayscale = new Uint8ClampedArray(data.length / 4);
+    for (let i = 0; i < data.length; i += 4) grayscale[i / 4] = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = y * w + x;
+        const gx = -1 * grayscale[idx - w - 1] + 1 * grayscale[idx - w + 1] + -2 * grayscale[idx - 1] + 2 * grayscale[idx + 1] + -1 * grayscale[idx + w - 1] + 1 * grayscale[idx + w + 1];
+        const gy = -1 * grayscale[idx - w - 1] - 2 * grayscale[idx - w] - 1 * grayscale[idx - w + 1] + 1 * grayscale[idx + w - 1] + 2 * grayscale[idx + w] + 1 * grayscale[idx + w + 1];
+        const mag = Math.sqrt(gx * gx + gy * gy);
+        let val = Math.max(0, Math.min(255, 255 - mag * 2));
+        const p = idx * 4; data[p] = val; data[p+1] = val; data[p+2] = val; data[p+3] = 255;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  function applyCelShading(imgData) {
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      let r = Math.round(data[i] / 64) * 64, g = Math.round(data[i+1] / 64) * 64, b = Math.round(data[i+2] / 64) * 64;
+      data[i] = Math.min(255, Math.max(0, (r - 128) * 1.4 + 128));
+      data[i+1] = Math.min(255, Math.max(0, (g - 128) * 1.4 + 128));
+      data[i+2] = Math.min(255, Math.max(0, (b - 128) * 1.4 + 128));
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  function applyAnime(imgData) {
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      let r = data[i], g = data[i+1], b = data[i+2], avg = (r + g + b) / 3;
+      data[i] = Math.min(255, Math.max(0, r + (r - avg) * 0.4 * 1.1 + 10));
+      data[i+1] = Math.min(255, Math.max(0, g + (g - avg) * 0.4 * 1.1 + 10));
+      data[i+2] = Math.min(255, Math.max(0, b + (b - avg) * 0.4 * 1.1 + 10));
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  function applyInkWash(imgData) {
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      let gray = (0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2] - 128) * 1.5 + 128;
+      data[i] = Math.min(255, Math.max(0, (gray / 255) * 245));
+      data[i+1] = Math.min(255, Math.max(0, (gray / 255) * 240));
+      data[i+2] = Math.min(255, Math.max(0, (gray / 255) * 232));
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  function applyUkiyoe(imgData) {
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      let gray = Math.round((0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]) / 51) * 51;
+      data[i] = Math.min(255, gray * 1.1 + 20); data[i+1] = Math.min(255, gray * 0.9 + 10); data[i+2] = Math.min(255, gray * 1.2);      
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  function applyComic(imgData) {
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      let gray = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+      data[i] = data[i+1] = data[i+2] = gray > 128 ? 255 : 0; 
+      if (gray > 128) { data[i+2] = 0; }
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  copyBtn.addEventListener('click', async () => {
+    if (!originalImage.src) return;
+    try {
+      canvas.toBlob(async (blob) => {
+        if (!blob) throw new Error("Canvas to Blob failed");
+        try {
+          const item = new ClipboardItem({ "image/png": blob });
+          await navigator.clipboard.write([item]);
+          showToast("✅ 图片已复制，可直接粘贴！");
+        } catch (err) {
+          showToast("❌ 不支持直接复制，已自动下载");
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `转绘_${currentFilter}_${Date.now()}.png`;
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+      }, 'image/png');
+    } catch (err) {
+      showToast("❌ 复制失败，请检查权限");
+    }
+  });
+
+  let toastTimer;
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 2000);
+  }
+</script>
+</body>
+</html>
