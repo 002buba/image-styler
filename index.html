@@ -24,9 +24,35 @@
     padding: 20px;
     box-shadow: 0 10px 30px rgba(0,0,0,0.5);
   }
-  h2 { text-align: center; font-size: 20px; margin-bottom: 20px; color: #e0e0e0; }
-  
-  /* 棋盘格背景，用于透明抠图查看 */
+
+  .header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  h2 { font-size: 20px; color: #e0e0e0; margin: 0; }
+
+  /* AI 状态标签 */
+  .ai-status {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: #333;
+    color: #aaa;
+    transition: all 0.3s;
+    border: 1px solid #444;
+  }
+  .ai-status.loading {
+    background: #4a3b1a; color: #f0ad4e; border-color: #f0ad4e;
+    animation: pulse 1.5s infinite;
+  }
+  .ai-status.ready {
+    background: #143d24; color: #10b981; border-color: #10b981;
+  }
+  @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
+
+  /* 棋盘格背景 */
   .canvas-container {
     width: 100%;
     height: 350px;
@@ -74,7 +100,7 @@
   }
   .filters::-webkit-scrollbar { height: 6px; }
   .filters::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
-  
+
   .filter-btn {
     background: #333;
     border: 1px solid #444;
@@ -102,10 +128,7 @@
   }
 
   /* 操作按钮区 */
-  .actions {
-    display: flex;
-    gap: 12px;
-  }
+  .actions { display: flex; gap: 12px; }
   .btn {
     flex: 1;
     padding: 14px;
@@ -121,15 +144,15 @@
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn-upload { background: #4b5563; color: #fff; }
   .btn-copy { background: #10b981; color: #fff; }
-  
+
   .file-input { display: none; }
-  
+
   /* 遮罩与提示 */
   .loading-mask {
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.7); display: none; justify-content: center; align-items: center;
+    background: rgba(0,0,0,0.85); display: none; justify-content: center; align-items: center;
     z-index: 10; color: #fff; font-size: 14px; flex-direction: column; gap: 10px;
-    border-radius: 12px; backdrop-filter: blur(2px);
+    border-radius: 12px; backdrop-filter: blur(2px); text-align: center; padding: 20px;
   }
   .spinner {
     width: 28px; height: 28px; border: 3px solid rgba(255,255,255,0.2);
@@ -149,7 +172,10 @@
 <body>
 
 <div class="container">
-  <h2>🎨 图片风格化转绘</h2>
+  <div class="header-row">
+    <h2>🎨 图片风格化转绘</h2>
+    <div class="ai-status" id="aiStatus">🟡 AI 模型未加载</div>
+  </div>
 
   <div class="canvas-container" id="dropZone">
     <span class="placeholder-text" id="placeholder">点击此处导入图片<br><span style="font-size:12px;">(导入后在下方选择风格)</span></span>
@@ -184,6 +210,12 @@
 
 <div class="toast" id="toast">提示信息</div>
 
+<!-- 引入 AI 抠图库 -->
+<script type="module">
+  import { removeBackground } from "https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.7.0/+esm";
+  window.imglyRemoveBackground = removeBackground;
+</script>
+
 <script>
   const canvas = document.getElementById('mainCanvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -196,6 +228,7 @@
   const toast = document.getElementById('toast');
   const loadingMask = document.getElementById('loadingMask');
   const loadingText = document.getElementById('loadingText');
+  const aiStatus = document.getElementById('aiStatus');
 
   let originalImage = new Image();
   let currentFilter = 'none';
@@ -219,7 +252,7 @@
     canvas.style.display = 'block';
     copyBtn.disabled = false;
 
-    const MAX_WIDTH = 500; 
+    const MAX_WIDTH = 600; 
     let width = originalImage.width;
     let height = originalImage.height;
     if (width > MAX_WIDTH) {
@@ -236,7 +269,7 @@
     if (!btn) return;
     if (isProcessing) { showToast("正在处理，请稍候"); return; }
     if (!originalImage.src) { showToast("请先导入图片"); return; }
-    
+
     const filterType = btn.dataset.filter;
     if (filterType === currentFilter) return;
     applyFilter(filterType);
@@ -245,10 +278,16 @@
   // 核心调度器
   function applyFilter(filterType) {
     if (!originalImage.src || isProcessing) return;
-    
+
+    // 如果是 AI 抠图
+    if (filterType === 'removebg') {
+        runAIBackgroundRemoval();
+        return;
+    }
+
     isProcessing = true;
     loadingMask.style.display = 'flex';
-    loadingText.innerText = filterType === 'removebg' ? '正在分析边缘结构...' : '正在重绘中...';
+    loadingText.innerText = '正在重绘中...';
 
     setTimeout(() => {
       setTimeout(() => {
@@ -266,7 +305,6 @@
           if (filterType !== 'none') {
             let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             switch (filterType) {
-              case 'removebg': applyAdvancedRemoveBg(imageData); break;
               case 'oil': applyOilPaint(imageData); break;
               case 'lineart': applyLineArt(imageData); break;
               case 'sharpen': applyConvolution(imageData, [0, -1, 0, -1, 5, -1, 0, -1, 0]); break; 
@@ -290,150 +328,186 @@
     }, 20); 
   }
 
-  // 通用卷积引擎 (锐化、浮雕等)
+  // ========== 核心：AI 智能抠图（带进度提示与降级保护） ==========
+  async function runAIBackgroundRemoval() {
+    isProcessing = true;
+    loadingMask.style.display = 'flex';
+
+    // 如果模型已经就绪，直接提示正在抠图
+    if (aiStatus.classList.contains('ready')) {
+        loadingText.innerHTML = '正在提取人物主体...';
+    } else {
+        loadingText.innerHTML = '首次运行，正在下载 AI 模型...<br><span id="dlProgress" style="font-size:12px;color:#aaa">准备下载...</span>';
+    }
+
+    try {
+        if (!window.imglyRemoveBackground) {
+            throw new Error("CDN 模块加载失败，请刷新重试");
+        }
+
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        const imageUrl = URL.createObjectURL(blob);
+
+        // 配置模型的下载进度回调
+        const config = {
+            progress: (key, current, total) => {
+                const progressEl = document.getElementById('dlProgress');
+                if (progressEl && total > 0) {
+                    const percent = Math.round((current / total) * 100);
+                    progressEl.innerText = `正在下载模型文件: ${key} (${percent}%)`;
+                }
+            }
+        };
+
+        // 调用 AI 模型
+        const resultBlob = await window.imglyRemoveBackground(imageUrl, config);
+        const resultUrl = URL.createObjectURL(resultBlob);
+
+        const img = new Image();
+        img.onload = () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+            currentFilter = 'removebg';
+            document.querySelectorAll('.filter-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.filter === 'removebg');
+            });
+
+            // 更新顶部状态标签为绿色就绪
+            aiStatus.className = 'ai-status ready';
+            aiStatus.innerText = '🟢 AI 模型已就绪';
+
+            loadingMask.style.display = 'none';
+            isProcessing = false;
+            showToast("✅ AI 抠图完成！");
+        };
+        img.src = resultUrl;
+
+    } catch (error) {
+        console.error("AI 抠图失败，降级本地:", error);
+        showToast("网络受限，已切换至本地抠图");
+
+        // 更新顶部状态为黄色（失败状态）
+        aiStatus.className = 'ai-status loading';
+        aiStatus.innerText = '🟡 降级：本地抠图';
+
+        // 降级方案：使用原有的本地泛洪抠图算法
+        setTimeout(() => {
+            try {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(originalImage, 0, 0, canvas.width, canvas.height);
+                let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+                applyAdvancedRemoveBg(imageData);
+
+                currentFilter = 'removebg';
+                document.querySelectorAll('.filter-btn').forEach(b => {
+                    b.classList.toggle('active', b.dataset.filter === 'removebg');
+                });
+            } catch (e) {
+                console.error("本地抠图也失败:", e);
+            } finally {
+                loadingMask.style.display = 'none';
+                isProcessing = false;
+            }
+        }, 100);
+    }
+  }
+
+  // --- 本地滤镜算法库 ---
+
   function applyConvolution(imgData, matrix) {
     const data = imgData.data;
     const w = canvas.width, h = canvas.height;
     const output = new Uint8ClampedArray(data.length);
-    
     for (let i = 0; i < data.length; i++) output[i] = data[i];
-
     const side = Math.round(Math.sqrt(matrix.length));
     const halfSide = Math.floor(side / 2);
-    
     let alpha = 0;
     for(let i = 0; i < matrix.length; i++) alpha += matrix[i];
     if (alpha === 0) alpha = 1;
-
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const dstOff = (y * w + x) * 4;
         let r = 0, g = 0, b = 0;
-
         for (let cy = 0; cy < side; cy++) {
           for (let cx = 0; cx < side; cx++) {
             const scy = y + cy - halfSide;
             const scx = x + cx - halfSide;
-            
             if (scy >= 0 && scy < h && scx >= 0 && scx < w) {
               const srcOff = (scy * w + scx) * 4;
               const wt = matrix[cy * side + cx];
-              r += data[srcOff] * wt;
-              g += data[srcOff + 1] * wt;
-              b += data[srcOff + 2] * wt;
+              r += data[srcOff] * wt; g += data[srcOff + 1] * wt; b += data[srcOff + 2] * wt;
             }
           }
         }
-        output[dstOff] = r / alpha;
-        output[dstOff + 1] = g / alpha;
-        output[dstOff + 2] = b / alpha;
-        output[dstOff + 3] = 255;
+        output[dstOff] = r / alpha; output[dstOff + 1] = g / alpha; output[dstOff + 2] = b / alpha; output[dstOff + 3] = 255;
       }
     }
     for (let i = 0; i < output.length; i++) data[i] = output[i];
     ctx.putImageData(imgData, 0, 0);
   }
 
-  // 【恢复版】智能抠图：形态学边缘膨胀 + 泛洪隔离
   function applyAdvancedRemoveBg(imgData) {
     const data = imgData.data;
     const w = canvas.width, h = canvas.height;
     const gray = new Uint8ClampedArray(w * h);
-    
-    for (let i = 0; i < data.length; i += 4) {
-      gray[i / 4] = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
-    }
-
+    for (let i = 0; i < data.length; i += 4) gray[i / 4] = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
     const edges = new Uint8Array(w * h);
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
         const idx = y * w + x;
-        const gx = -1 * gray[idx - w - 1] + 1 * gray[idx - w + 1]
-                 + -2 * gray[idx - 1]     + 2 * gray[idx + 1]
-                 + -1 * gray[idx + w - 1] + 1 * gray[idx + w + 1];
-        const gy = -1 * gray[idx - w - 1] - 2 * gray[idx - w] - 1 * gray[idx - w + 1]
-                 + 1 * gray[idx + w - 1] + 2 * gray[idx + w] + 1 * gray[idx + w + 1];
-        if (Math.sqrt(gx * gx + gy * gy) > 45) { // 阈值 45
-          edges[idx] = 1;
-        }
+        const gx = -1 * gray[idx - w - 1] + 1 * gray[idx - w + 1] + -2 * gray[idx - 1] + 2 * gray[idx + 1] + -1 * gray[idx + w - 1] + 1 * gray[idx + w + 1];
+        const gy = -1 * gray[idx - w - 1] - 2 * gray[idx - w] - 1 * gray[idx - w + 1] + 1 * gray[idx + w - 1] + 2 * gray[idx + w] + 1 * gray[idx + w + 1];
+        if (Math.sqrt(gx * gx + gy * gy) > 45) edges[idx] = 1;
       }
     }
-
-    // 边缘膨胀 (Dilate)
     const expandedEdges = new Uint8Array(w * h);
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
         const idx = y * w + x;
-        if (edges[idx] || edges[idx-1] || edges[idx+1] || edges[idx-w] || edges[idx+w]) {
-          expandedEdges[idx] = 1;
-        }
+        if (edges[idx] || edges[idx-1] || edges[idx+1] || edges[idx-w] || edges[idx+w]) expandedEdges[idx] = 1;
       }
     }
-
-    // 泛洪填充
     const mask = new Uint8Array(w * h);
     const queue = [];
-    
     for (let x = 0; x < w; x++) { queue.push(x); queue.push((h - 1) * w + x); }
     for (let y = 0; y < h; y++) { queue.push(y * w); queue.push(y * w + w - 1); }
-
     while (queue.length > 0) {
       const idx = queue.shift();
       if (mask[idx] !== 0) continue; 
       mask[idx] = 1; 
-
-      const x = idx % w;
-      const y = Math.floor(idx / w);
-
+      const x = idx % w, y = Math.floor(idx / w);
       if (x > 0 && expandedEdges[idx - 1] !== 1 && mask[idx - 1] === 0) queue.push(idx - 1);
       if (x < w - 1 && expandedEdges[idx + 1] !== 1 && mask[idx + 1] === 0) queue.push(idx + 1);
       if (y > 0 && expandedEdges[idx - w] !== 1 && mask[idx - w] === 0) queue.push(idx - w);
       if (y < h - 1 && expandedEdges[idx + w] !== 1 && mask[idx + w] === 0) queue.push(idx + w);
     }
-
-    // 应用蒙版及羽化
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
-        const idx = y * w + x;
-        const pIdx = idx * 4;
-        
-        if (mask[idx] === 0) {
-          data[pIdx+3] = 255; 
-        } else {
-          data[pIdx+3] = 0;   
-        }
+        const idx = y * w + x, pIdx = idx * 4;
+        if (mask[idx] === 0) data[pIdx+3] = 255; 
+        else data[pIdx+3] = 0;   
       }
     }
-    
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
-        const idx = y * w + x;
-        const pIdx = idx * 4;
+        const idx = y * w + x, pIdx = idx * 4;
         if (data[pIdx+3] === 255) {
-          let transparent = 0;
-          if (data[(idx-1)*4+3] === 0) transparent++;
-          if (data[(idx+1)*4+3] === 0) transparent++;
-          if (data[(idx-w)*4+3] === 0) transparent++;
-          if (data[(idx+w)*4+3] === 0) transparent++;
-          
-          if (transparent > 0) data[pIdx+3] = 150; 
+          let t = 0;
+          if (data[(idx-1)*4+3] === 0) t++; if (data[(idx+1)*4+3] === 0) t++;
+          if (data[(idx-w)*4+3] === 0) t++; if (data[(idx+w)*4+3] === 0) t++;
+          if (t > 0) data[pIdx+3] = 150; 
         }
       }
     }
-
     ctx.putImageData(imgData, 0, 0);
   }
 
-  // 动画线稿 (压制反光)
   function applyLineArt(imgData) {
-    const data = imgData.data;
-    const w = canvas.width, h = canvas.height;
+    const data = imgData.data, w = canvas.width, h = canvas.height;
     const gray = new Uint8ClampedArray(data.length / 4);
-    
-    for (let i = 0; i < data.length; i += 4) {
-      gray[i / 4] = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
-    }
-
+    for (let i = 0; i < data.length; i += 4) gray[i / 4] = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
     const blurred = new Uint8ClampedArray(gray.length);
     const kernel = [1/16, 2/16, 1/16, 2/16, 4/16, 2/16, 1/16, 2/16, 1/16];
     for (let y = 1; y < h - 1; y++) {
@@ -443,60 +517,95 @@
         blurred[y * w + x] = sum;
       }
     }
-
     for (let i = 0; i < gray.length; i++) {
-      const base = gray[i];
-      const blend = blurred[i];
-      let result = base;
-
-      if (base > 220 && blend > 220) {
-        result = 255; 
-      } else if (blend < 255) {
+      let base = gray[i], blend = blurred[i], result = base;
+      if (base > 220 && blend > 220) result = 255; 
+      else if (blend < 255) {
         result = Math.min(255, (base * 255) / (255 - blend));
         result = Math.min(240, Math.max(0, (result - 128) * 1.5 + 128));
       }
-
-      const p = i * 4; 
-      data[p] = result; data[p+1] = result; data[p+2] = result; data[p+3] = 255;
+      const p = i * 4; data[p] = result; data[p+1] = result; data[p+2] = result; data[p+3] = 255;
     }
     ctx.putImageData(imgData, 0, 0);
   }
 
+  // ========== Kuwahara 油画滤镜（移植自 Python 实现） ==========
   function applyOilPaint(imgData) {
     const data = imgData.data;
     const w = canvas.width, h = canvas.height;
     const output = new Uint8ClampedArray(data.length);
-    const radius = 3; 
+
+    // radius 对应 Python 里的 a：(2a+1) 为窗口边长
+    // 原代码 a=6 → 13x13 窗口。浏览器性能与观感平衡取 4（9x9）。
+    const radius = 4;
+
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        let minVariance = Infinity, bestColor = [0, 0, 0];
-        const quadrants = [{ dx: -radius, dy: -radius }, { dx: 0, dy: -radius }, { dx: -radius, dy: 0 }, { dx: 0, dy: 0 }];
+        // 四个象限的偏移范围（与 Python 的 dx/dy 范围对应）
+        // 象限1: 左上  象限2: 右上  象限3: 左下  象限4: 右下
+        const quads = [
+          [-radius, 0, -radius, 0],   // [x0, x1, y0, y1]
+          [0, radius, -radius, 0],
+          [-radius, 0, 0, radius],
+          [0, radius, 0, radius]
+        ];
+
+        let bestVar = Infinity;
+        let bestR = 0, bestG = 0, bestB = 0;
+
         for (let q = 0; q < 4; q++) {
-          let sumR = 0, sumG = 0, sumB = 0, sumSq = 0, count = 0;
-          const startX = x + quadrants[q].dx, startY = y + quadrants[q].dy;
-          for (let ky = 0; ky <= radius; ky++) {
-            for (let kx = 0; kx <= radius; kx++) {
-              const px = startX + kx, py = startY + ky;
-              if (px >= 0 && px < w && py >= 0 && py < h) {
-                const idx = (py * w + px) * 4;
-                const r = data[idx], g = data[idx+1], b = data[idx+2];
-                sumR += r; sumG += g; sumB += b; sumSq += (r*r + g*g + b*b); count++;
-              }
+          const x0 = quads[q][0], x1 = quads[q][1];
+          const y0 = quads[q][2], y1 = quads[q][3];
+          let sr = 0, sg = 0, sb = 0;
+          let sr2 = 0, sg2 = 0, sb2 = 0;
+          let count = 0;
+
+          for (let dy = y0; dy <= y1; dy++) {
+            const py = y + dy;
+            if (py < 0 || py >= h) continue;
+            for (let dx = x0; dx <= x1; dx++) {
+              const px = x + dx;
+              if (px < 0 || px >= w) continue;
+              const idx = (py * w + px) * 4;
+              const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+              sr += r; sg += g; sb += b;
+              sr2 += r * r; sg2 += g * g; sb2 += b * b;
+              count++;
             }
           }
-          if (count > 0) {
-            const variance = sumSq / count - Math.pow((sumR + sumG + sumB) / (3 * count), 2);
-            if (variance < minVariance) { minVariance = variance; bestColor = [sumR / count, sumG / count, sumB / count]; }
+
+          if (count === 0) continue;
+
+          // 三通道方差之和（等价于把 RGB 当独立维度统计总方差）
+          const mr = sr / count, mg = sg / count, mb = sb / count;
+          const vr = sr2 / count - mr * mr;
+          const vg = sg2 / count - mg * mg;
+          const vb = sb2 / count - mb * mb;
+          const variance = vr + vg + vb;
+
+          if (variance < bestVar) {
+            bestVar = variance;
+            bestR = mr; bestG = mg; bestB = mb;
           }
         }
+
         const outIdx = (y * w + x) * 4;
-        output[outIdx] = bestColor[0]; output[outIdx+1] = bestColor[1]; output[outIdx+2] = bestColor[2]; output[outIdx+3] = 255;
+        output[outIdx]     = bestR;
+        output[outIdx + 1] = bestG;
+        output[outIdx + 2] = bestB;
+        output[outIdx + 3] = 255;
       }
     }
+
+    // 轻微噪声，模拟颜料颗粒
     for (let i = 0; i < output.length; i += 4) {
-      let noise = (Math.random() - 0.5) * 20; 
-      data[i] = output[i] + noise; data[i+1] = output[i+1] + noise; data[i+2] = output[i+2] + noise; data[i+3] = 255;
+      const noise = (Math.random() - 0.5) * 18;
+      data[i]     = output[i]     + noise;
+      data[i + 1] = output[i + 1] + noise;
+      data[i + 2] = output[i + 2] + noise;
+      data[i + 3] = 255;
     }
+
     ctx.putImageData(imgData, 0, 0);
   }
 
@@ -583,22 +692,24 @@
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `转绘_${currentFilter}_${Date.now()}.png`;
+                   a.download = `转绘_${currentFilter}_${Date.now()}.png`;
           a.click();
           URL.revokeObjectURL(url);
         }
       }, 'image/png');
     } catch (err) {
-      showToast("❌ 复制失败，请检查权限");
+      showToast("复制失败，请重试");
     }
   });
 
-  let toastTimer;
+  // 全局提示函数
   function showToast(msg) {
     toast.textContent = msg;
     toast.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toast.classList.remove('show'), 2000);
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => {
+      toast.classList.remove('show');
+    }, 2000);
   }
 </script>
 </body>
