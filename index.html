@@ -32,7 +32,6 @@
   }
   h2 { font-size: 20px; color: #e0e0e0; margin: 0; }
   
-  /* AI 状态标签 */
   .ai-status {
     font-size: 12px;
     padding: 4px 10px;
@@ -42,16 +41,10 @@
     transition: all 0.3s;
     border: 1px solid #444;
   }
-  .ai-status.loading {
-    background: #4a3b1a; color: #f0ad4e; border-color: #f0ad4e;
-    animation: pulse 1.5s infinite;
-  }
-  .ai-status.ready {
-    background: #143d24; color: #10b981; border-color: #10b981;
-  }
+  .ai-status.loading { background: #4a3b1a; color: #f0ad4e; border-color: #f0ad4e; animation: pulse 1.5s infinite; }
+  .ai-status.ready { background: #143d24; color: #10b981; border-color: #10b981; }
   @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
   
-  /* 棋盘格背景 */
   .canvas-container {
     width: 100%;
     height: 350px;
@@ -88,7 +81,6 @@
     text-shadow: 1px 1px 2px #000;
   }
 
-  /* 滤镜选择区 */
   .filters {
     display: flex;
     gap: 10px;
@@ -120,13 +112,8 @@
     border-color: #3b82f6;
     box-shadow: 0 0 10px rgba(59, 130, 246, 0.4);
   }
-  .filter-btn.special {
-    background: #8b5cf6;
-    border-color: #8b5cf6;
-    color: #fff;
-  }
+  .filter-btn.special { background: #8b5cf6; border-color: #8b5cf6; color: #fff; }
 
-  /* 操作按钮区 */
   .actions { display: flex; gap: 12px; }
   .btn {
     flex: 1;
@@ -146,7 +133,6 @@
   
   .file-input { display: none; }
   
-  /* 遮罩与提示 */
   .loading-mask {
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;
     background: rgba(0,0,0,0.85); display: none; justify-content: center; align-items: center;
@@ -209,7 +195,6 @@
 
 <div class="toast" id="toast">提示信息</div>
 
-<!-- 引入 AI 抠图库 -->
 <script type="module">
   import { removeBackground } from "https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.7.0/+esm";
   window.imglyRemoveBackground = removeBackground;
@@ -233,7 +218,6 @@
   let currentFilter = 'none';
   let isProcessing = false;
 
-  // 导入图片事件
   dropZone.addEventListener('click', () => fileInput.click());
   uploadBtn.addEventListener('click', () => fileInput.click());
 
@@ -251,7 +235,8 @@
     canvas.style.display = 'block';
     copyBtn.disabled = false;
 
-    const MAX_WIDTH = 600; 
+    // 恢复 1200 分辨率，保证线条细节不丢失
+    const MAX_WIDTH = 1200; 
     let width = originalImage.width;
     let height = originalImage.height;
     if (width > MAX_WIDTH) {
@@ -274,7 +259,6 @@
     applyFilter(filterType);
   });
 
-  // 核心调度器
   function applyFilter(filterType) {
     if (!originalImage.src || isProcessing) return;
     
@@ -304,7 +288,7 @@
             let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             switch (filterType) {
               case 'oil': applyOilPaint(imageData); break;
-              case 'lineart': applyCannyLineArt(imageData); break; // 替换为 Canny 算法
+              case 'lineart': applySmoothLineArt(imageData); break; // 平滑线稿
               case 'sharpen': applyConvolution(imageData, [0, -1, 0, -1, 5, -1, 0, -1, 0]); break; 
               case 'emboss': applyConvolution(imageData, [1, 1, 1, 1, 0.7, -1, -1, -1, -1]); break; 
               case 'sketch': applySketch(imageData); break;
@@ -326,7 +310,93 @@
     }, 20); 
   }
 
-  // ========== 核心：AI 智能抠图 ==========
+  // ========== 新算法：连贯的平滑线稿 (解决虚线断裂问题) ==========
+  function applySmoothLineArt(imgData) {
+    const data = imgData.data;
+    const w = canvas.width, h = canvas.height;
+    
+    const gray = new Uint8ClampedArray(w * h);
+    for (let i = 0; i < data.length; i += 4) {
+      gray[i / 4] = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+    }
+
+    // 1. 轻微高斯模糊去噪
+    const blurred = new Uint8ClampedArray(w * h);
+    const kernel = [1/16, 2/16, 1/16, 2/16, 4/16, 2/16, 1/16, 2/16, 1/16];
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        let sum = 0, kIdx = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            sum += gray[(y + dy) * w + (x + dx)] * kernel[kIdx++];
+          }
+        }
+        blurred[y * w + x] = sum;
+      }
+    }
+
+    // 2. 基于 Sobel 计算梯度幅值
+    const mag = new Float32Array(w * h);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = y * w + x;
+        const gx = -1 * blurred[idx - w - 1] + 1 * blurred[idx - w + 1]
+                 + -2 * blurred[idx - 1]     + 2 * blurred[idx + 1]
+                 + -1 * blurred[idx + w - 1] + 1 * blurred[idx + w + 1];
+        const gy = -1 * blurred[idx - w - 1] - 2 * blurred[idx - w] - 1 * blurred[idx - w + 1]
+                 + 1 * blurred[idx + w - 1] + 2 * blurred[idx + w] + 1 * blurred[idx + w + 1];
+        mag[idx] = Math.sqrt(gx * gx + gy * gy);
+      }
+    }
+
+    // 3. 膨胀操作 (把断裂的线连起来)
+    const dilated = new Float32Array(w * h);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = y * w + x;
+        // 取周围 3x3 区域的最大值
+        const maxVal = Math.max(
+          mag[idx], mag[idx-1], mag[idx+1], 
+          mag[idx-w], mag[idx+w], mag[idx-w-1], 
+          mag[idx-w+1], mag[idx+w-1], mag[idx+w+1]
+        );
+        dilated[idx] = maxVal;
+      }
+    }
+
+    // 4. 抗锯齿平滑映射 (均值模糊，代替硬阈值二值化)
+    // 我们不把它变成非黑即白的线，而是变成平滑的灰色边缘，这样不会出现像素马赛克断点
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = y * w + x;
+        let v = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+             v += dilated[idx + dy * w + dx];
+          }
+        }
+        v = v / 9; // 均值
+        
+        // 阈值调整：大于 35 开始显现，越往上越黑（控制线条深浅）
+        let color = 255;
+        if (v > 35) {
+          // 将梯度值映射到 0-255 的暗度，保证边缘平滑过渡
+          let intensity = 255 - (v - 35) * 3; 
+          color = Math.max(0, Math.min(255, intensity));
+        }
+        
+        const p = idx * 4;
+        data[p] = color;
+        data[p+1] = color;
+        data[p+2] = color;
+        data[p+3] = 255;
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  // ========== 其他本地滤镜算法库 (保持原样) ==========
   async function runAIBackgroundRemoval() {
     isProcessing = true;
     loadingMask.style.display = 'flex';
@@ -400,94 +470,6 @@
     }
   }
 
-  // ========== 新：参考 Python OpenCV 实现的 Canny 线稿 ==========
-  function applyCannyLineArt(imgData) {
-    const data = imgData.data;
-    const w = canvas.width, h = canvas.height;
-    const gray = new Uint8ClampedArray(w * h);
-    
-    // 1. 转灰度
-    for (let i = 0; i < data.length; i += 4) {
-      gray[i / 4] = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
-    }
-
-    // 2. 3x3 高斯模糊 (参考 cv2.GaussianBlur(img,(3,3),0))
-    const blurred = new Uint8ClampedArray(w * h);
-    const kernel = [1/16, 2/16, 1/16, 2/16, 4/16, 2/16, 1/16, 2/16, 1/16];
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        let sum = 0, kIdx = 0;
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            sum += gray[(y + dy) * w + (x + dx)] * kernel[kIdx++];
-          }
-        }
-        blurred[y * w + x] = sum;
-      }
-    }
-
-    // 3. Sobel 边缘检测 + 双阈值处理 (模拟 cv2.Canny(img, 50, 150))
-    // 为了在 JS 里实现得足够快，这里用简化的双阈值判定替代复杂的非极大值抑制
-    const strongEdge = 150;
-    const weakEdge = 50;
-    
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        const idx = y * w + x;
-        
-        // Sobel X 和 Y
-        const gx = -1 * blurred[idx - w - 1] + 1 * blurred[idx - w + 1]
-                 + -2 * blurred[idx - 1]     + 2 * blurred[idx + 1]
-                 + -1 * blurred[idx + w - 1] + 1 * blurred[idx + w + 1];
-        const gy = -1 * blurred[idx - w - 1] - 2 * blurred[idx - w] - 1 * blurred[idx - w + 1]
-                 + 1 * blurred[idx + w - 1] + 2 * blurred[idx + w] + 1 * blurred[idx + w + 1];
-        
-        // 梯度幅值
-        const mag = Math.sqrt(gx * gx + gy * gy);
-        
-        // 双阈值逻辑
-        let edge = 0;
-        if (mag >= strongEdge) {
-          edge = 1; // 强边缘
-        } else if (mag >= weakEdge) {
-          // 弱边缘：判断周围8个像素有没有强边缘，如果有，则作为边缘连接起来
-          if ((y > 1 && x > 1 && y < h - 2 && x < w - 2) && (
-              blurred[idx - w - 1] > strongEdge || blurred[idx - w] > strongEdge || blurred[idx - w + 1] > strongEdge ||
-              blurred[idx - 1] > strongEdge || blurred[idx + 1] > strongEdge ||
-              blurred[idx + w - 1] > strongEdge || blurred[idx + w] > strongEdge || blurred[idx + w + 1] > strongEdge
-          )) {
-             edge = 1;
-          }
-        }
-
-        // 4. 赋值与反色 (参考 cv2.bitwise_not)
-        // 如果是边缘，则为黑线 (0)；否则为白底 (255)
-        const val = edge === 1 ? 0 : 255;
-        
-        const p = idx * 4;
-        data[p] = val;
-        data[p+1] = val;
-        data[p+2] = val;
-        data[p+3] = 255;
-      }
-    }
-
-    // 边缘像素处理（补白）
-    for (let x = 0; x < w; x++) {
-        let p1 = x * 4; data[p1] = data[p1+1] = data[p1+2] = 255;
-        let p2 = ((h-1) * w + x) * 4; data[p2] = data[p2+1] = data[p2+2] = 255;
-    }
-    for (let y = 0; y < h; y++) {
-        let p1 = (y * w) * 4; data[p1] = data[p1+1] = data[p1+2] = 255;
-        let p2 = (y * w + w - 1) * 4; data[p2] = data[p2+1] = data[p2+2] = 255;
-    }
-
-    ctx.putImageData(imgData, 0, 0);
-  }
-
-
-  // --- 其他本地滤镜算法库 ---
-  
   function applyConvolution(imgData, matrix) {
     const data = imgData.data;
     const w = canvas.width, h = canvas.height;
@@ -656,7 +638,7 @@
       let gray = (0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2] - 128) * 1.5 + 128;
       data[i] = Math.min(255, Math.max(0, (gray / 255) * 245));
       data[i+1] = Math.min(255, Math.max(0, (gray / 255) * 240));
-            data[i+2] = Math.min(255, Math.max(0, (gray / 255) * 232));
+      data[i+2] = Math.min(255, Math.max(0, (gray / 255) * 232));
     }
     ctx.putImageData(imgData, 0, 0);
   }
@@ -664,7 +646,7 @@
   function applyUkiyoe(imgData) {
     const data = imgData.data;
     for (let i = 0; i < data.length; i += 4) {
-      let gray = Math.round((0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]) / 51) * 51;
+            let gray = Math.round((0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]) / 51) * 51;
       data[i] = Math.min(255, gray * 1.1 + 20); data[i+1] = Math.min(255, gray * 0.9 + 10); data[i+2] = Math.min(255, gray * 1.2);      
     }
     ctx.putImageData(imgData, 0, 0);
